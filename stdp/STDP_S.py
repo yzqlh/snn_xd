@@ -1,19 +1,13 @@
-from spikingjelly.datasets.n_mnist import NMNIST
-from torch.utils.data import DataLoader
+
 from spikingjelly.activation_based import base,layer,neuron,functional,learning,encoding,surrogate,monitor
 import torch.nn as nn
 import torch,gc
-
-from spikingjelly.datasets import play_frame
 import torch.nn.functional as F
-from snntorch import functional as SF
 import argparse
-import torch.nn.utils.weight_norm as weight_norm
 import torch.utils.data as data
 from torch.cuda import amp
 from torchvision import transforms
 from torchvision import datasets
-from matplotlib import pyplot as plt
 import cv2
 import numpy as np
 import math
