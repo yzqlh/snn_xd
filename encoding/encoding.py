@@ -183,6 +183,9 @@ class PoissonEncoder(StatelessEncoder):
         out_spike = torch.rand_like(x).le(x).to(x)
         return out_spike
 
+
+
+
 class LatencyEncoder(StatefulEncoder):
 
     def __init__(self, T: int, enc_function='linear', step_mode='s'):
@@ -294,12 +297,14 @@ class LatencyEncoder(StatefulEncoder):
         self.spike = self.spike.permute(d_seq)
 
 
+
+
 class Rank_order_Encoder(StatefulEncoder):
 
-    def __init__(self , T:int, time: int, step_mode='s'):
+    def __init__(self , T:int, step_mode='s'):   #time: int
 
         super().__init__(T, step_mode)
-        self.time = time
+        # self.time = time
 
     def single_step_encode(self, x: torch.Tensor):
 
@@ -322,42 +327,32 @@ class Rank_order_Encoder(StatefulEncoder):
 
         .. code-block:: python
 
-            time = 5
-            input_data=[0.5, 0.3, 0.8, 0.2, 0.6]
-            x_in = torch.Tensor(input_data)
-
-            # 创建 Rank_order_Encoder 类的实例
-            encoder = Rank_order_Encoder(T=1, time=time)
-
-            # 进行秩序编码并打印结果
-            binary_code = encoder.single_step_encode(x = x_in)
-            print("Binary code for input signal:", binary_code)
+            x = torch.rand(size=[8, 2])
+            print('x', x)
+            T = 16
+            encoder = Rank_order_Encoder(T)
+            for t in range(T):
+                print(encoder(x))
 
         """
         assert (x >= 0).all(), "Inputs must be non-negative"
 
-        shape, size = x.shape, x.numel()
+        original_shape = x.size()
         x = x.flatten()
-        time = int(self.time / self.T)
+        # 使用torch.argsort()函数获取数据排序后的索引
+        sorted_indices = torch.argsort(x, descending=True)
+        # 使用torch.argsort()函数获取数据排序后的索引
+        encoded_data = torch.zeros_like(x)
+        for i, idx in enumerate(sorted_indices):
+            # 将排序后的索引作为编码后的数据
+            encoded_data[idx] = i
+        encoded_data = encoded_data.round().long()
+        encoded_data = encoded_data.view(original_shape)
 
-        # Create spike times in order of decreasing intensity.
-        x /= x.max()
-        times = torch.zeros(size)
-        times[x != 0] = 1 / x[x != 0]
-        times *= time / times.max()  # Extended through simulation time.
-        # times = torch.ceil(times).long()
-        # Create spike times tensor.
-        spikes = torch.zeros(time, size).byte()
-
-        for i in range(size):
-
-            max_value, max_index = torch.max(times, dim=0, keepdim=True)
-            # max_index 包含了最大值的索引，现在我们可以使用这个索引来更新spikes张量,将 spikes 中对应最大值索引的位置设为 1
-            spikes[max_index, i] = 1
-            times[max_index] = 0
-
-        return spikes.reshape(time, *shape)
-
+        self.spike = F.one_hot(encoded_data, num_classes=self.T).to(x)
+        d_seq = list(range(self.spike.ndim - 1))
+        d_seq.insert(0, self.spike.ndim - 1)
+        self.spike = self.spike.permute(d_seq)
 
 
 
