@@ -22,11 +22,12 @@ def get_k_winners(x,net,kwta=1,inhibition_radius=0,down=24,time=30):
         other feature maps. Note that only one winner can be selected from each feature map.
 
     Args:
-        potentials (Tensor): The tensor of input potentials.
+        x():
+        net (Tensor): The tensor of input potentials.
         kwta (int, optional): The number of winners. Default: 1
         inhibition_radius (int, optional): The radius of lateral inhibition. Default: 0
-        spikes (Tensor, optional): Spike-wave corresponding to the input potentials. Default: None
-
+        down():
+        time():
     Returns:
         List: List of winners.
     """
@@ -121,6 +122,7 @@ def pointwise_inhibition(spike,thresholded_potentials):
     thresholded_potentials = thresholded_potentials.permute(4,0,1,2,3)
     return thresholded_potentials
 
+#简化STDP不根据具体时间大小进行更新，只根据时间的顺序更新
 class STDP(nn.Module):
     def __init__(self, conv_layer, learning_rate=(0.004, -0.003), use_stabilizer=True, lower_bound=0, upper_bound=1):
         super(STDP, self).__init__()
