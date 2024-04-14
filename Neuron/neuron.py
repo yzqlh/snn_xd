@@ -1,3 +1,4 @@
+import functools
 from abc import abstractmethod
 from typing import Callable
 import torch
@@ -15,15 +16,9 @@ class BaseNode(base.MemoryModule):
                  step_mode='s'):
         """
         :param v_threshold: 神经元的阈值电压
-        :type v_threshold: float
-
         :param v_reset: 神经元的重置电压。如果不为 ``None``，当神经元释放脉冲后，电压会被重置为 ``v_reset``；
             如果设置为 ``None``，当神经元释放脉冲后，电压会被减去 ``v_threshold``
-        :type v_reset: float
-
         :param surrogate_function: 反向传播时用来计算脉冲函数梯度的替代函数
-        :type surrogate_function: Callable
-
         可微分SNN神经元的基类神经元。
 
         """
@@ -32,6 +27,7 @@ class BaseNode(base.MemoryModule):
         assert isinstance(detach_reset, bool)
         super().__init__()
 
+        #base中的状态注册器
         if v_reset is None:
             self.register_memory('v', 0.)
         else:
@@ -154,14 +150,6 @@ class IFNode(BaseNode):
         """
         super().__init__(v_threshold, v_reset, surrogate_function, detach_reset, step_mode)
 
-    @property
-    def supported_backends(self):
-        if self.step_mode == 's':
-            return ('torch', 'cupy')
-        elif self.step_mode == 'm':
-            return ('torch', 'cupy')
-        else:
-            raise ValueError(self.step_mode)
 
     def neuronal_charge(self, x: torch.Tensor):
         self.v = self.v + x
@@ -260,20 +248,12 @@ class IFNode(BaseNode):
     #         return spike_seq
 
     def single_step_forward(self, x: torch.Tensor):
-        if self.training:
-            if self.backend == 'torch':
-                return super().single_step_forward(x)
-
-            else:
-                raise ValueError(self.backend)
-
+        self.v_float_to_tensor(x)
+        if self.v_reset is None:
+            spike, self.v = self.jit_eval_single_step_forward_soft_reset(x, self.v, self.v_threshold)
         else:
-            self.v_float_to_tensor(x)
-            if self.v_reset is None:
-                spike, self.v = self.jit_eval_single_step_forward_soft_reset(x, self.v, self.v_threshold)
-            else:
-                spike, self.v = self.jit_eval_single_step_forward_hard_reset(x, self.v, self.v_threshold, self.v_reset)
-            return spike
+            spike, self.v = self.jit_eval_single_step_forward_hard_reset(x, self.v, self.v_threshold, self.v_reset)
+        return spike
 
 
 class LIFNode(BaseNode):
@@ -304,14 +284,6 @@ class LIFNode(BaseNode):
         self.tau = tau
         self.decay_input = decay_input
 
-    @property
-    def supported_backends(self):
-        if self.step_mode == 's':
-            return ('torch', 'cupy')
-        elif self.step_mode == 'm':
-            return ('torch', 'cupy')
-        else:
-            raise ValueError(self.step_mode)
 
     def extra_repr(self):
         return super().extra_repr() + f', tau={self.tau}'
@@ -496,34 +468,26 @@ class LIFNode(BaseNode):
     #     return spike_seq, v, v_seq
 
     def single_step_forward(self, x: torch.Tensor):
-        if self.training:
-            if self.backend == 'torch':
-                return super().single_step_forward(x)
-
+        self.v_float_to_tensor(x)
+        if self.v_reset is None:
+            if self.decay_input:
+                spike, self.v = self.jit_eval_single_step_forward_soft_reset_decay_input(x, self.v,
+                                                                                         self.v_threshold, self.tau)
             else:
-                raise ValueError(self.backend)
-
+                spike, self.v = self.jit_eval_single_step_forward_soft_reset_no_decay_input(x, self.v,
+                                                                                            self.v_threshold,
+                                                                                            self.tau)
         else:
-            self.v_float_to_tensor(x)
-            if self.v_reset is None:
-                if self.decay_input:
-                    spike, self.v = self.jit_eval_single_step_forward_soft_reset_decay_input(x, self.v,
-                                                                                             self.v_threshold, self.tau)
-                else:
-                    spike, self.v = self.jit_eval_single_step_forward_soft_reset_no_decay_input(x, self.v,
-                                                                                                self.v_threshold,
-                                                                                                self.tau)
+            if self.decay_input:
+                spike, self.v = self.jit_eval_single_step_forward_hard_reset_decay_input(x, self.v,
+                                                                                         self.v_threshold,
+                                                                                         self.v_reset, self.tau)
             else:
-                if self.decay_input:
-                    spike, self.v = self.jit_eval_single_step_forward_hard_reset_decay_input(x, self.v,
-                                                                                             self.v_threshold,
-                                                                                             self.v_reset, self.tau)
-                else:
-                    spike, self.v = self.jit_eval_single_step_forward_hard_reset_no_decay_input(x, self.v,
-                                                                                                self.v_threshold,
-                                                                                                self.v_reset,
-                                                                                                self.tau)
-            return spike
+                spike, self.v = self.jit_eval_single_step_forward_hard_reset_no_decay_input(x, self.v,
+                                                                                            self.v_threshold,
+                                                                                            self.v_reset,
+                                                                                            self.tau)
+        return spike
 
     # def multi_step_forward(self, x_seq: torch.Tensor):
     #     if self.training:
@@ -575,3 +539,163 @@ class LIFNode(BaseNode):
     #         return spike_seq
 
 
+class SRMNode(BaseNode):
+
+    def __init__(self, tau_m=10, tau_s=5, t_current=0.3, t_membrane=20, eta_reset=5, v_threshold: float = 1., v_reset: float = 0.,
+                 surrogate_function: Callable = surrogate.Sigmoid(), detach_reset: bool = False, step_mode='s', current_time: float = 1):
+        """
+        :param threshold: 阈值
+        :param tau_m: tau_m通常是膜时间常数，表示膜电位的恢复速度。较小的τm值表示神经元的膜电位将更快地恢复到其静息电位
+        :param tau_s: 表示突触后电流的持续时间。较小的τs值表示突触后电流将更快地衰减，反之亦然
+        :param v_reset: 静息电位
+        """
+        super().__init__(v_threshold, v_reset, surrogate_function, detach_reset, step_mode)
+        self.current_time = current_time
+        self.t_membrane = t_membrane
+        self.t_current = t_current
+        self.eta_reset = eta_reset
+        self.tau_m = tau_m
+        self.tau_s = tau_s
+
+    def neuronal_charge(self, x: torch.Tensor):
+            self.v = self.v + x
+
+    #其他写法（考虑）
+    # def eta(self, s):
+    #     r"""
+    #     Evaluate the Eta function:
+    #     .. math:: \eta (s) = - \eta_{0} * \exp(\frac{- s}{\tau_{recov}})
+    #     :param s: Time s
+    #     :return: Function eta(s) at time s
+    #     :return type: Float or Vector of Floats
+    #     """
+    #
+    #     return - self.eta_reset*np.exp(-s/self.t_membrane)
+    #
+    # @functools.lru_cache()
+    # def eps(self, s):
+    #     r"""
+    #     Evaluate the Epsilon function:
+    #     .. math:: \epsilon (s) =  \frac{1}{1 - \frac{\tau_s}{\tau_m}} (\exp(\frac{-s}{\tau_m}) - \exp(\frac{-s}{\tau_s}))
+    #     Returns a single Float Value if the time constants (current, membrane) are the same for each neuron.
+    #     Returns a Float Vector with eps(s) for each neuron, if the time constants are different for each neuron.
+    #     :param s: Time s
+    #     :return: Function eps(s) at time s
+    #     :rtype: Float or Vector of Floats
+    #     """
+    #     return (1/(1-self.current_time/self.t_membrane))*(np.exp(-s/self.t_membrane) - np.exp(-s/self.current_time))
+
+    # def jit_eval_single_step_forward_soft_reset(self, current_time,last_spike_time, x: torch.Tensor, v: torch.Tensor, v_threshold: float):
+    #     v += self.eps(current_time - self.last_spike_time) + self.eta(current_time - self.last_spike_time)
+    #     spike = (v >= v_threshold).to(x)
+    #     # 获取激发神经元的索引
+    #     spike_indices = spike.nonzero(as_tuple=True)
+    #
+    #     # 计算时间差
+    #     if len(spike_indices[0]) > 0:
+    #         last_spike_time[spike_indices] = current_time
+    #     v = v - spike * v_threshold
+    #     return spike, v
+
+    """在下面代码中，使用了近似的形式，忽略了膜电压的漏电流部分中的exp() 部分，直接在每个时间步长内按比例更新膜电压"""
+    def jit_eval_single_step_forward_hard_reset(self, current_time, last_spike_time, x: torch.Tensor, v: torch.Tensor, v_threshold: float, v_reset: float):
+        v += (self.v_reset - v) / self.tau_m
+        v += x / self.tau_s
+        spike = (v >= v_threshold).to(x)
+        v = v_reset * spike + (1. - spike) * v
+        return spike, v
+
+    def jit_eval_single_step_forward_soft_reset(self, current_time,last_spike_time, x: torch.Tensor, v: torch.Tensor, v_threshold: float):
+        v += (self.v_reset - v) / self.tau_m
+        v += x / self.tau_s
+        spike = (v >= v_threshold).to(x)
+        v = v - spike * v_threshold
+        return spike, v
+
+
+    #
+    # @staticmethod
+    # @torch.jit.script
+    # def jit_eval_multi_step_forward_hard_reset(x_seq: torch.Tensor, v: torch.Tensor, v_threshold: float,
+    #                                            v_reset: float):
+    #     spike_seq = torch.zeros_like(x_seq)
+    #     for t in range(x_seq.shape[0]):
+    #         v = v + x_seq[t]
+    #         spike = (v >= v_threshold).to(x_seq)
+    #         v = v_reset * spike + (1. - spike) * v
+    #         spike_seq[t] = spike
+    #     return spike_seq, v
+    #
+    # @staticmethod
+    # @torch.jit.script
+    # def jit_eval_multi_step_forward_hard_reset_with_v_seq(x_seq: torch.Tensor, v: torch.Tensor, v_threshold: float,
+    #                                                       v_reset: float):
+    #     spike_seq = torch.zeros_like(x_seq)
+    #     v_seq = torch.zeros_like(x_seq)
+    #     for t in range(x_seq.shape[0]):
+    #         v = v + x_seq[t]
+    #         spike = (v >= v_threshold).to(x_seq)
+    #         v = v_reset * spike + (1. - spike) * v
+    #         spike_seq[t] = spike
+    #         v_seq[t] = v
+    #     return spike_seq, v, v_seq
+
+    # @staticmethod
+    # @torch.jit.script
+    # def jit_eval_multi_step_forward_soft_reset(x_seq: torch.Tensor, v: torch.Tensor, v_threshold: float):
+    #     spike_seq = torch.zeros_like(x_seq)
+    #     for t in range(x_seq.shape[0]):
+    #         v = v + x_seq[t]
+    #         spike = (v >= v_threshold).to(x_seq)
+    #         v = v - spike * v_threshold
+    #         spike_seq[t] = spike
+    #     return spike_seq, v
+    #
+    # @staticmethod
+    # @torch.jit.script
+    # def jit_eval_multi_step_forward_soft_reset_with_v_seq(x_seq: torch.Tensor, v: torch.Tensor, v_threshold: float):
+    #     spike_seq = torch.zeros_like(x_seq)
+    #     v_seq = torch.zeros_like(x_seq)
+    #     for t in range(x_seq.shape[0]):
+    #         v = v + x_seq[t]
+    #         spike = (v >= v_threshold).to(x_seq)
+    #         v = v - spike * v_threshold
+    #         spike_seq[t] = spike
+    #         v_seq[t] = v
+    #     return spike_seq, v, v_seq
+    #
+    # def multi_step_forward(self, x_seq: torch.Tensor):
+    #     if self.training:
+    #         if self.backend == 'torch':
+    #             return super().multi_step_forward(x_seq)
+    #         else:
+    #             raise ValueError(self.backend)
+    #
+    #     else:
+    #         self.v_float_to_tensor(x_seq[0])
+    #         if self.v_reset is None:
+    #             if self.store_v_seq:
+    #                 spike_seq, self.v, self.v_seq = self.jit_eval_multi_step_forward_soft_reset_with_v_seq(x_seq,
+    #                                                                                                        self.v,
+    #                                                                                                        self.v_threshold)
+    #             else:
+    #                 spike_seq, self.v = self.jit_eval_multi_step_forward_soft_reset(x_seq, self.v, self.v_threshold)
+    #         else:
+    #             if self.store_v_seq:
+    #                 spike_seq, self.v, self.v_seq = self.jit_eval_multi_step_forward_hard_reset_with_v_seq(x_seq,
+    #                                                                                                        self.v,
+    #                                                                                                        self.v_threshold,
+    #                                                                                                        self.v_reset)
+    #             else:
+    #                 spike_seq, self.v = self.jit_eval_multi_step_forward_hard_reset(x_seq, self.v, self.v_threshold,
+    #                                                                                 self.v_reset)
+    #         return spike_seq
+
+    def single_step_forward(self, x: torch.Tensor):
+        self.v_float_to_tensor(x)
+        last_spike_time = torch.zeros(x.shape)
+        if self.v_reset is None:
+            spike, self.v = self.jit_eval_single_step_forward_soft_reset(self.current_time, last_spike_time, x, self.v, self.v_threshold)
+        else:
+            spike, self.v = self.jit_eval_single_step_forward_hard_reset(self.current_time, last_spike_time, x, self.v, self.v_threshold, self.v_reset)
+        return spike
