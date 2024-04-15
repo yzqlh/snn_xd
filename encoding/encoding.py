@@ -327,31 +327,37 @@ class Rank_order_Encoder(StatefulEncoder):
         示例代码:
 
         .. code-block:: python
-            input_data=[[0.5, 0.3, 0.8, 0.2, 0.6]]
-            x_in = torch.Tensor(input_data)
-
-            # 创建 Rank_order_Encoder 类的实例
-            encoder = Rank_order_Encoder(T=5)
-
-            # 进行秩序编码并打印结果
-            binary_code = encoder.single_step_encode(x = x_in)
-            print("Binary code for input signal:", binary_code)
+         x = torch.rand(size=[3, 8, 2])
+        print('x', x)
+        T = 16
+        encoder = Rank_order_Encoder(T)
+        for t in range(T):
+            print(encoder(x))
 
 
         """
         assert (x >= 0).all(), "Inputs must be non-negative"
 
         original_shape = x.size()
-        x_flatten = x.flatten()
-        encoded_data = torch.zeros_like(x_flatten).unsqueeze(0).reshape(x.size(0), -1)
-        for j in range(x.size(0)):
-            x_ = x[j].flatten()
-            # 使用torch.argsort()函数获取数据排序后的索引
-            sorted_indices = torch.argsort(x_, descending=True)
+        if x.ndim >= 3:
+            x_flatten = x.view(x.shape[0], -1)
+            encoded_data = torch.zeros_like(x_flatten)
+            for j in range(x.size(0)):
+                x_ = x[j].flatten()
+                # 使用torch.argsort()函数获取数据排序后的索引
+                sorted_indices = torch.argsort(x_, descending=True)
+                for i, idx in enumerate(sorted_indices):
+                    # 将排序后的索引作为编码后的数据
+                    encoded_data[j][idx] = i
+
+
+        else:
+            x_flatten = x.flatten()
+            encoded_data = torch.zeros_like(x_flatten)
+            sorted_indices = torch.argsort(x_flatten, descending=True)
             for i, idx in enumerate(sorted_indices):
                 # 将排序后的索引作为编码后的数据
-                encoded_data[j][idx] = i
-
+                encoded_data[idx] = i
         encoded_data = encoded_data.round().long()
         encoded_data = encoded_data.view(original_shape)
         self.spike = F.one_hot(encoded_data, num_classes=self.T).to(x)
@@ -360,6 +366,4 @@ class Rank_order_Encoder(StatefulEncoder):
         d_seq.insert(0, self.spike.ndim - 1)
 
         self.spike = self.spike.permute(d_seq)
-
-
 
