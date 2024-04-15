@@ -1,9 +1,11 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 import base
 from abc import abstractmethod
+import torch
+
+
 
 class StatelessEncoder(nn.Module, base.StepModule):
     def __init__(self, step_mode='s'):
@@ -318,40 +320,45 @@ class Rank_order_Encoder(StatefulEncoder):
         :param T: Simulation time step.
         :return: Tensor of shape ``[time, n_1, ..., n_k]`` of rank order-encoded spikes.
         首先，断言输入数据 X 非负，如果不满足条件，则抛出异常。
-        然后，函数获取输入数据的形状和元素总数，并将其展平为一维张量。
-        接着，函数通过将输入数据除以其最大值来创建尖峰时间，并通过乘以模拟时间来扩展尖峰时间。
-        之后，函数创建一个形状为 [time, size] 的零张量 spikes，用于存储尖峰时间。
-        依次寻times中最大值,获得索引,在 spikes 张量的对应位置标记为1。
-        最后，函数将 spikes 张量重新塑形为 [time, n_1, ..., n_k] 的形状，并返回这个张量。
+        然后，函数获取输入数据的形状和元素总数，通过循环的方式依次将x[j]展平为一维张量,，并对其进行排序。
+        接着，通过第二层循环将将排序后的索引作为编码后的数据，再将编码后的数据 encoded_data 转换为整数类型，
+        将其形状恢复为原始形状并调用function函数将encoded_data转换为独热码。
+
         示例代码:
 
         .. code-block:: python
+            input_data=[[0.5, 0.3, 0.8, 0.2, 0.6]]
+            x_in = torch.Tensor(input_data)
 
-            x = torch.rand(size=[8, 2])
-            print('x', x)
-            T = 16
-            encoder = Rank_order_Encoder(T)
-            for t in range(T):
-                print(encoder(x))
+            # 创建 Rank_order_Encoder 类的实例
+            encoder = Rank_order_Encoder(T=5)
+
+            # 进行秩序编码并打印结果
+            binary_code = encoder.single_step_encode(x = x_in)
+            print("Binary code for input signal:", binary_code)
+
 
         """
         assert (x >= 0).all(), "Inputs must be non-negative"
 
         original_shape = x.size()
-        x = x.flatten()
-        # 使用torch.argsort()函数获取数据排序后的索引
-        sorted_indices = torch.argsort(x, descending=True)
-        # 使用torch.argsort()函数获取数据排序后的索引
-        encoded_data = torch.zeros_like(x)
-        for i, idx in enumerate(sorted_indices):
-            # 将排序后的索引作为编码后的数据
-            encoded_data[idx] = i
+        x_flatten = x.flatten()
+        encoded_data = torch.zeros_like(x_flatten).unsqueeze(0).reshape(x.size(0), -1)
+        for j in range(x.size(0)):
+            x_ = x[j].flatten()
+            # 使用torch.argsort()函数获取数据排序后的索引
+            sorted_indices = torch.argsort(x_, descending=True)
+            for i, idx in enumerate(sorted_indices):
+                # 将排序后的索引作为编码后的数据
+                encoded_data[j][idx] = i
+
         encoded_data = encoded_data.round().long()
         encoded_data = encoded_data.view(original_shape)
-
         self.spike = F.one_hot(encoded_data, num_classes=self.T).to(x)
+
         d_seq = list(range(self.spike.ndim - 1))
         d_seq.insert(0, self.spike.ndim - 1)
+
         self.spike = self.spike.permute(d_seq)
 
 
