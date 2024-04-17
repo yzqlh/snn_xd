@@ -196,3 +196,347 @@ class STDP(nn.Module):
 
     def update_learning_rate(self, ap, an):
         self.learning_rate = tuple([ap, an])
+def Tstdp_linear_single_step(
+    fc: nn.Linear, in_spike: torch.Tensor, out_spike: torch.Tensor,
+    trace_pre1: Union[float, torch.Tensor, None],trace_pre2: Union[float, torch.Tensor, None],
+    trace_post1: Union[float, torch.Tensor, None],trace_post2: Union[float, torch.Tensor, None],
+    tau_pre1: float, tau_pre2: float, tau_post1: float, tau_post2: float,
+    f_pre: Callable = lambda x: x, f_post: Callable = lambda x: x
+):
+    if trace_pre1 is None:
+        trace_pre1 = 0.
+    if trace_pre2 is None:
+        trace_pre2 = 0.
+    if trace_post1 is None:
+        trace_post1 = 0.
+    if trace_post2 is None:
+        trace_post2 = 0.
+
+    weight = fc.weight.data
+    trace_pre1 = trace_pre1 - trace_pre1 / tau_pre1 + in_spike      # shape = [batch_size, N_in]
+    trace_pre2 = trace_pre2 - trace_pre2 / tau_pre2 + in_spike      # shape = [batch_size, N_in]
+    trace_post1 = trace_post1 - trace_post1 / tau_post1 + out_spike # shape = [batch_size, N_out]
+    trace_post2 = trace_post2 - trace_post2 / tau_post2 + out_spike # shape = [batch_size, N_out]
+    
+    # [batch_size, N_out, N_in] -> [N_out, N_in]
+    delta_w_pre = -f_pre(weight) * (trace_post1.unsqueeze(2) * in_spike.unsqueeze(1)).sum(0) -f_pre(weight) *\
+                    (trace_post1.unsqueeze(2) * in_spike.unsqueeze(1)).sum(0) * (trace_pre2.unsqueeze(1) * out_spike.unsqueeze(2)).sum(0)
+    delta_w_post = f_post(weight) * (trace_pre1.unsqueeze(1) * out_spike.unsqueeze(2)).sum(0) + f_post(weight) *\
+                    (trace_post2.unsqueeze(2) * in_spike.unsqueeze(1)).sum(0) * (trace_pre1.unsqueeze(1) * out_spike.unsqueeze(2)).sum(0)
+    return trace_pre1, trace_post1, trace_pre2, trace_post2, delta_w_pre + delta_w_post
+
+def Tstdp_conv2d_single_step(
+    conv: nn.Conv2d, in_spike: torch.Tensor, out_spike: torch.Tensor,
+    trace_pre1: Union[torch.Tensor, None], trace_pre2: Union[torch.Tensor, None], 
+    trace_post1: Union[torch.Tensor, None], trace_post2: Union[torch.Tensor, None],
+    tau_pre1: float, tau_pre2: float, 
+    tau_post1: float, tau_post2: float,
+    f_pre: Callable = lambda x: x, f_post: Callable = lambda x: x
+):
+    
+    if conv.dilation != (1, 1):
+        raise NotImplementedError(
+            'STDP with dilation != 1 for Conv2d has not been implemented!'
+        )
+    if conv.groups != 1:
+        raise NotImplementedError(
+            'STDP with groups != 1 for Conv2d has not been implemented!'
+        )
+
+    stride_h = conv.stride[0]
+    stride_w = conv.stride[1]
+
+    if conv.padding == (0, 0):
+        pass
+    else:
+        pH = conv.padding[0]
+        pW = conv.padding[1]
+        if conv.padding_mode != 'zeros':
+            in_spike = F.pad(
+                in_spike, conv._reversed_padding_repeated_twice,
+                mode=conv.padding_mode
+            )
+        else:
+            in_spike = F.pad(in_spike, pad=(pW, pW, pH, pH))
+
+    if trace_pre1 is None:
+        trace_pre1 = torch.zeros_like(
+            in_spike, device=in_spike.device, dtype=in_spike.dtype
+        )
+    if trace_pre2 is None:
+        trace_pre2 = torch.zeros_like(
+            in_spike, device=in_spike.device, dtype=in_spike.dtype
+        )
+    if trace_post1 is None:
+        trace_post1 = torch.zeros_like(
+            out_spike, device=in_spike.device, dtype=in_spike.dtype
+        )
+    if trace_post2 is None:
+        trace_post2 = torch.zeros_like(
+            out_spike, device = in_spike.device, dtype=in_spike.dtype
+        )
+
+    trace_pre1 = trace_pre1 - trace_pre1 / tau_pre1 + in_spike
+    trace_post1 = trace_post1 - trace_post1 / tau_post1 + out_spike
+
+    trace_pre2 = trace_pre2 - trace_pre2 / tau_pre2 
+    trace_post2 = trace_post2 - trace_post2 / tau_post2 
+    
+    delta_w = torch.zeros_like(conv.weight.data)
+    for h in range(conv.weight.shape[2]):
+        for w in range(conv.weight.shape[3]):
+            h_end = in_spike.shape[2] - conv.weight.shape[2] + 1 + h
+            w_end = in_spike.shape[3] - conv.weight.shape[3] + 1 + w
+
+            pre_spike = in_spike[:, :, h:h_end:stride_h, w:w_end:stride_w]  # shape = [batch_size, C_in, h_out, w_out]
+            post_spike = out_spike  # shape = [batch_size, C_out, h_out, h_out]
+            weight = conv.weight.data[:, :, h, w]   # shape = [batch_size_out, C_in]
+
+            tr_pre1 = trace_pre1[:, :, h:h_end:stride_h, w:w_end:stride_w]    # shape = [batch_size, C_in, h_out, w_out]
+            tr_pre2 = trace_pre2[:, :, h:h_end:stride_h, w:w_end:stride_w]    # shape = [batch_size, C_in, h_out, w_out]
+            tr_post1 = trace_post1   # shape = [batch_size, C_out, h_out, w_out]
+            tr_post2 = trace_post2   # shape = [batch_size, C_out, h_out, w_out]
+
+            delta_w_pre = - (f_pre(weight) *\
+                            (tr_post1.unsqueeze(2) * pre_spike.unsqueeze(1))\
+                            .permute([1, 2, 0, 3, 4]).sum(dim = [2, 3, 4])) - (f_pre(weight) * 0.005 *\
+                            ((tr_post1.unsqueeze(2) * pre_spike.unsqueeze(1)) * (tr_pre2.unsqueeze(1) * post_spike.unsqueeze(2)))\
+                            .permute([1, 2, 0, 3, 4]).sum(dim = [2, 3, 4]))
+            delta_w_post = (f_post(weight) *\
+                           (tr_pre1.unsqueeze(1) * post_spike.unsqueeze(2))\
+                           .permute([1, 2, 0, 3, 4]).sum(dim = [2, 3, 4])) + f_post(weight)  * 0.005 *\
+                           ((tr_post2.unsqueeze(2) * pre_spike.unsqueeze(1)) * (tr_pre1.unsqueeze(1) * post_spike.unsqueeze(2)))\
+                            .permute([1, 2, 0, 3, 4]).sum(dim = [2, 3, 4])
+
+            delta_w[:, :, h, w] += delta_w_pre + delta_w_post
+    trace_pre2 = trace_pre2  + in_spike
+    trace_post2 = trace_post2  + out_spike
+    return trace_pre1, trace_post1, trace_pre2, trace_post2, delta_w
+    
+def resume_linear_multi_step(
+    fc: nn.Linear, 
+    in_spike: torch.Tensor, 
+    out_spike: torch.Tensor,
+    trace_pre: Union[float, torch.Tensor, None],
+    a: float,
+    targets: torch.Tensor,
+    tau_pre: float
+    
+):
+    weight = fc.weight.data
+    delta_w_ = torch.zeros_like(weight)
+    T = in_spike.shape[0]
+
+    # [batch_size, N_out, 1] * [batch_size, 1, N_in]  -->[N_out, N_in]
+    for t in range(T):
+        trace_pre, dw = resume_linear_single_step(
+            fc, in_spike[t], out_spike[t], trace_pre, a,targets[t],tau_pre
+        )
+        delta_w_ += dw
+    
+    return trace_pre, delta_w_
+
+
+class resume_Temporal(base.MemoryModule):
+    def __init__(self, step_mode: str,
+        synapse: Union[nn.Conv2d, nn.Linear], 
+        sn: neuron.BaseNode,
+        tau_pre: float,
+        a: float
+):
+        super().__init__()
+        self.step_mode = step_mode
+        self.tau_pre = tau_pre
+        self.a = a
+        self.synapse = synapse
+        self.in_spike_monitor = monitor.InputMonitor(synapse)
+        self.out_spike_monitor = monitor.OutputMonitor(sn)
+        self.register_memory('trace_pre', None)
+        
+    def reset(self):
+        super(resume_Temporal, self).reset()
+        self.in_spike_monitor.clear_recorded_data()
+        self.out_spike_monitor.clear_recorded_data()
+
+
+    def disable(self):
+        self.in_spike_monitor.disable()
+        self.out_spike_monitor.disable()
+
+
+    def enable(self):
+        self.in_spike_monitor.enable()
+        self.out_spike_monitor.enable()
+        
+        
+    def step(self, targets, on_grad: bool = True, scale: float = 1.):
+        length = self.in_spike_monitor.records.__len__()
+        delta_w = None
+        if self.step_mode == 's':
+            if isinstance(self.synapse, nn.Linear):
+                resume_f = resume_linear_single_step
+            elif isinstance(self.synapse, nn.Conv2d):
+                stdp_f = stdp_conv2d_single_step
+            elif isinstance(self.synapse, nn.Conv1d):
+                stdp_f = stdp_conv1d_single_step
+            else:
+                raise NotImplementedError(self.synapse)
+        elif self.step_mode == 'm':
+            if isinstance(self.synapse, (nn.Linear, nn.Conv1d, nn.Conv2d)):
+                resume_f = resume_linear_multi_step
+            else:
+                raise NotImplementedError(self.synapse)
+        else:
+            raise ValueError(self.step_mode)
+        for i in range(length):
+            
+            in_spike = self.in_spike_monitor.records.pop(0)     # [batch_size, N_in]
+            out_spike = self.out_spike_monitor.records.pop(0)   # [batch_size, N_out]
+            self.trace_pre, dw = resume_f(
+                self.synapse, in_spike, out_spike, self.trace_pre,
+                self.a, targets, self.tau_pre,
+            )
+            
+            if scale != 1.:
+                dw *= scale
+
+            delta_w = dw if (delta_w is None) else (delta_w + dw)
+
+        if on_grad:
+            if self.synapse.weight.grad is None:
+                self.synapse.weight.grad = -delta_w
+            else:
+                self.synapse.weight.grad = self.synapse.weight.grad - delta_w
+        else:
+            return delta_w
+
+class resume(base.MemoryModule):
+    def __init__(self, step_mode: str,
+        synapse: Union[nn.Conv2d, nn.Linear], 
+        sn: neuron.BaseNode,
+        tau_pre: float,
+        a: float
+):
+        super().__init__()
+        self.step_mode = step_mode
+        self.tau_pre = tau_pre
+        self.a = a
+        self.synapse = synapse
+        self.in_spike_monitor = monitor.InputMonitor(synapse)
+        self.out_spike_monitor = monitor.OutputMonitor(sn)
+        self.register_memory('trace_pre', None)
+        
+    def reset(self):
+        super(resume, self).reset()
+        self.in_spike_monitor.clear_recorded_data()
+        self.out_spike_monitor.clear_recorded_data()
+
+
+    def disable(self):
+        self.in_spike_monitor.disable()
+        self.out_spike_monitor.disable()
+
+
+    def enable(self):
+        self.in_spike_monitor.enable()
+        self.out_spike_monitor.enable()
+        
+        
+    def step(self, targets, on_grad: bool = True, scale: float = 1.):
+        length = self.in_spike_monitor.records.__len__()
+        delta_w = None
+        for i in range(length):
+            
+            in_spike = self.in_spike_monitor.records.pop(0)     # [batch_size, N_in]
+            out_spike = self.out_spike_monitor.records.pop(0)   # [batch_size, N_out]
+
+            self.trace_pre, dw = resume_linear_single_step(
+                self.synapse, in_spike, out_spike, self.trace_pre,
+                self.a, targets, self.tau_pre,
+            )
+            
+            if scale != 1.:
+                dw *= scale
+
+            delta_w = dw if (delta_w is None) else (delta_w + dw)
+
+        if on_grad:
+            if self.synapse.weight.grad is None:
+                self.synapse.weight.grad = -delta_w
+            else:
+                self.synapse.weight.grad = self.synapse.weight.grad - delta_w
+        else:
+            return delta_w
+            
+class TSTDPLearner(base.MemoryModule):
+    def __init__(
+        self, step_mode: str,
+        synapse: Union[nn.Conv2d, nn.Linear], sn: neuron.BaseNode,
+        tau_pre1: float, tau_pre2: float, tau_post1: float, tau_post2: float,
+        f_pre: Callable = lambda x: x, f_post: Callable = lambda x: x
+    ):
+        super().__init__()
+        self.step_mode = step_mode
+        self.tau_pre1 = tau_pre1
+        self.tau_post1 = tau_post1
+        self.tau_pre2 = tau_pre2
+        self.tau_post2 = tau_post2
+        self.f_pre = f_pre
+        self.f_post = f_post
+        self.synapse = synapse
+        self.in_spike_monitor = monitor.InputMonitor(synapse)
+        self.out_spike_monitor = monitor.OutputMonitor(sn)
+
+        self.register_memory('trace_pre1', None)
+        self.register_memory('trace_post1', None)
+        self.register_memory('trace_pre2', None)
+        self.register_memory('trace_post2', None)
+
+    def reset(self):
+        super(TSTDPLearner, self).reset()
+        self.in_spike_monitor.clear_recorded_data()
+        self.out_spike_monitor.clear_recorded_data()
+
+
+    def disable(self):
+        self.in_spike_monitor.disable()
+        self.out_spike_monitor.disable()
+
+
+    def enable(self):
+        self.in_spike_monitor.enable()
+        self.out_spike_monitor.enable()
+
+
+    def step(self, on_grad: bool = True, scale: float = 1.):
+        length = self.in_spike_monitor.records.__len__()
+        delta_w = None
+        if isinstance(self.synapse, nn.Conv2d):
+            stdp_f = Tstdp_conv2d_single_step
+            #raise NotImplementedError(self.synapse)
+        elif isinstance(self.synapse, nn.Linear):
+            stdp_f = Tstdp_linear_single_step
+        else:
+            raise NotImplementedError(self.synapse)
+        for _ in range(length):
+            in_spike = self.in_spike_monitor.records.pop(0)     # [batch_size, N_in]
+            out_spike = self.out_spike_monitor.records.pop(0)   # [batch_size, N_out]
+
+            self.trace_pre1, self.trace_post1, self.trace_pre2, self.trace_post2, dw = stdp_f(
+                self.synapse, in_spike, out_spike,
+                self.trace_pre1, self.trace_pre1, self.trace_post1, self.trace_post2, 
+                self.tau_pre1, self.tau_pre2, self.tau_post1, self.tau_post2,
+                self.f_pre, self.f_post
+            )
+            if scale != 1.:
+                dw *= scale
+
+            delta_w = dw if (delta_w is None) else (delta_w + dw)
+
+        if on_grad:
+            if self.synapse.weight.grad is None:
+                self.synapse.weight.grad = -delta_w
+            else:
+                self.synapse.weight.grad = self.synapse.weight.grad - delta_w
+        else:
+            return delta_w
