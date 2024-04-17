@@ -87,39 +87,37 @@ def get_k_winners(x,net,kwta=1,inhibition_radius=0,down=24,time=30):
     winner = [(tongdao_seq[i],x_w_position_seq[i],x_h_position_seq[i]) for i in range(num)] 
     return winner
 
-def pointwise_inhibition(spike,thresholded_potentials):
-    
-    spike = spike.permute(1,2,3,4,0)
-    _,tongdao_num,w_num,_,time = spike.shape
-    device = spike.device                               #提取device
-    thresholded_potentials = thresholded_potentials.permute(1,2,3,4,0).to(device)
-    x1 = functional.first_spike_index(spike)            #找到发出首脉冲的神经元索引
-    x1 = (x1.int()) * (torch.arange(0,time).to(device) + 1)  #对x1进行操作以便可以通过min得到首脉冲
-    x1[x1 == 0] = time + 1                          #对于无脉冲的情况0将其改成31
-    x_min,x_idx = x1.min(dim=4)
-    x_min_,x_idx_ = x_min.min(dim=1)
-    x_min_[x_min_==time+1] = time+2
-    
-    for i in range(tongdao_num):
-        thresholded_potentials[:,i,~(torch.eq(x_min[:,i,...],x_min_).squeeze(0)),:] = 0
-    for i in range(time):
-        if torch.all(thresholded_potentials[...,i]==0):
-            pass
-        else:
-            thresholded_potentials_max,thresholded_potentials_idx = thresholded_potentials[...,i].max(dim=1)
-            thresholded_potentials_idx[thresholded_potentials_max==0] = -1
-            thresholded_potentials_idx = thresholded_potentials_idx.repeat(tongdao_num,1,1)
-            for j in range(tongdao_num):
-                # 创建一个与原始张量形状相同的全零张量  
-                mask = torch.zeros_like(thresholded_potentials_idx[j]) 
-                mask[thresholded_potentials_idx[j]==j] = 1
-                mask = mask.bool()
-                if j == 0:
-                    thresholded_potentials[:,j+1:,mask,:] = 0.
-                else:
-                    thresholded_potentials[:,0:j,mask,:] = 0.
-                    thresholded_potentials[:,j+1:,mask,:] = 0.
-    thresholded_potentials = thresholded_potentials.permute(4,0,1,2,3)
+# only one neuron can fire at each position (for != feature maps)
+def pointwise_inhibition(thresholded_potentials,threshold=10.):
+    thresholded_potentials = thresholded_potentials.squeeze(1)
+
+    # maximum of each position in each time step
+    maximum = torch.max(thresholded_potentials, dim=1, keepdim=True)
+    # compute signs for detection of the earliest spike
+    clamp_pot = maximum[0].sign()
+
+    # maximum of clamped values is the indices of the earliest spikes
+    x = thresholded_potentials.permute(1,2,3,0)
+    x[x<threshold] =0
+    x = x.sign()
+    x1 = functional.first_spike_index(x)
+    clamp_pot_max_1 = (x1.int()) * (torch.arange(0,clamp_pot.size(0)).detach().to(device) + 1)
+    clamp_pot_max_1[clamp_pot_max_1==0] = clamp_pot.size(0)+2
+    clamp_pot_max_1,_ = clamp_pot_max_1.min(dim=3,keepdim=True)
+    clamp_pot_max_1,_ = clamp_pot_max_1.min(dim=0,keepdim=True)
+    clamp_pot_max_1 = clamp_pot_max_1.permute(3,0,1,2) - 1 
+    clamp_pot_max_1.clamp_(0, clamp_pot.size(0) - 1)
+    # last timestep of each feature map
+    clamp_pot_max_0 = clamp_pot.sum(dim=0,keepdim=True)
+
+    # finding winners (maximum potentials between early spikes) (indices of winners)
+    winners = maximum[1].gather(0, clamp_pot_max_1)
+    # generating inhibition coefficient
+    coef = torch.zeros_like(thresholded_potentials[0]).unsqueeze_(0)
+    coef.scatter_(1, winners, clamp_pot_max_0)
+    # applying inhibition to potentials (broadcasting multiplication)
+    thresholded_potentials = torch.mul(thresholded_potentials, coef)
+    thresholded_potentials = thresholded_potentials.unsqueeze(1)
     return thresholded_potentials
 
 #简化STDP不根据具体时间大小进行更新，只根据时间的顺序更新
