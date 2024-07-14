@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import math
 
-def get_k_winners(x,net,kwta=1,inhibition_radius=0,down=24,time=30):
+def get_k_winners(potentials, kwta=1, inhibition_radius=0, spikes=None):
     r"""Finds at most :attr:`kwta` winners first based on the earliest spike time, then based on the maximum potential.
     It returns a list of winners, each in a tuple of form (feature, row, column).
 
@@ -22,105 +22,66 @@ def get_k_winners(x,net,kwta=1,inhibition_radius=0,down=24,time=30):
         other feature maps. Note that only one winner can be selected from each feature map.
 
     Args:
-        x():
-        net (Tensor): The tensor of input potentials.
+        potentials (Tensor): The tensor of input potentials.
         kwta (int, optional): The number of winners. Default: 1
         inhibition_radius (int, optional): The radius of lateral inhibition. Default: 0
-        down():
-        time():
+        spikes (Tensor, optional): Spike-wave corresponding to the input potentials. Default: None
+
     Returns:
         List: List of winners.
     """
-    h = net
-    x = x.permute(1,2,3,4,0)                        #对输入脉冲进行重构以便后续操作
-    time = x.shape[4]                               #提取时间步长
-    tongdao_num = x.shape[1]                        #提取通道长度
-    w_num = x.shape[2]                              #提取长度和宽度
-    device = x.device                               #提取device
-    h = h.permute(1,2,3,4,0).to(device)
-    x1 = functional.first_spike_index(x)            #找到发出首脉冲的神经元索引
-    x1 = (x1.int()) * (torch.arange(0,time).detach().to(device) + 1)  #对x1进行操作以便可以通过min得到首脉冲
-    x1[x1 == 0] = time + 1                          #对于无脉冲的情况0将其改成31
-    tongdao_seq = {}
-    x_h_position_seq = {}
-    x_w_position_seq = {}
-    num = 0
-    for i in range(kwta):
-        x_min = x1.min()
-        if x_min > 25:
-            break
-        num += 1
-        h_max = h[...,x_min-1].max()
-        idx = torch.where(h[...,x_min-1]==h_max)
 
-        x_h_position = idx[3][0]
-        x_w_position = idx[2][0]
-        tongdao = idx[1][0]
-        tongdao_seq[i] = tongdao
-        x_h_position_seq[i] = x_h_position
-        x_w_position_seq[i] = x_w_position
-         #每个通道应采取不同的神经元
-        x_h_position_left = x_h_position - inhibition_radius
-        x_h_position_right = x_h_position + inhibition_radius
-        x_w_position_up = x_w_position - inhibition_radius
-        x_w_position_down = x_w_position + inhibition_radius
-        
-        if x_h_position_left < 0:
-            x_h_position_left = 0
-        if x_w_position_up < 0:
-            x_w_position_up = 0
-        if x_h_position_right > down - 1:
-            x_h_position_right = down - 1
-        if x_w_position_down > down - 1:
-            x_w_position_down = down - 1
-        if tongdao == 0:
-            h[:,tongdao+1:,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = 0
-            x1[:,0:tongdao,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = time + 2
-            x1[:,tongdao+1:,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = time + 2
+    # finding earliest potentials for each position in each feature
+
+    maximum = (spikes.permute(1,2,3,0).int() * (torch.arange(0,spikes.shape[0]).detach().to(spikes.device) + 1)).permute(3,0,1,2)
+
+    maximum[maximum==0] = spikes.size(0) 
+    maximum = maximum - 1
+    maximum, _ = torch.min(maximum, dim=0, keepdim=True)
+    maximum = maximum.long()
+    maximum.clamp_(0, spikes.size(0)-1)
+    values = potentials.gather(dim=0, index=maximum)  # gathering values
+    # propagating the earliest potential through the whole timesteps
+    spikes1 = spikes
+    # 当遇到第一个1时，将该位置及其之后的所有元素都设置为1
+    cumulative_sum = torch.cumsum(spikes1, dim=0)
+    mask = cumulative_sum > 0
+    spikes1[mask] = 1
+
+    truncated_pot = spikes1 * values
+
+    # summation with a high enough value (maximum of potential summation over timesteps) at spike positions
+    v = truncated_pot.max() * potentials.size(0)
+
+    truncated_pot.addcmul_(spikes1, v)
+    # summation over all timesteps
+    total = truncated_pot.sum(dim=0, keepdim=True)
+
+    total.squeeze_(0)
+    global_pooling_size = tuple(total.size())
+    winners = []
+    for k in range(kwta):
+        max_val, max_idx = total.view(-1).max(0)
+        if max_val.item() != 0:
+            # finding the 3d position of the maximum value
+            max_idx_unraveled = np.unravel_index(
+                max_idx.item(), global_pooling_size)
+            # adding to the winners list
+            winners.append(max_idx_unraveled)
+
+            # preventing the same feature to be the next winner
+            total[max_idx_unraveled[0], :, :] = 0
+            # columnar inhibition (increasing the chance of leanring diverse features)
+            if inhibition_radius != 0:
+                rowMin, rowMax = max(0, max_idx_unraveled[-2]-inhibition_radius), min(
+                    total.size(-2), max_idx_unraveled[-2]+inhibition_radius+1)
+                colMin, colMax = max(0, max_idx_unraveled[-1]-inhibition_radius), min(
+                    total.size(-1), max_idx_unraveled[-1]+inhibition_radius+1)
+                total[:, rowMin:rowMax, colMin:colMax] = 0
         else:
-            h[:,0:tongdao,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = 0
-            h[:,tongdao+1:,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = 0
-            x1[:,0:tongdao,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = time + 2
-            x1[:,tongdao+1:,x_w_position_up:x_w_position_down+1,x_h_position_left:x_h_position_right+1,:] = time + 2
-        h[:,tongdao,:,:,:] = 0
-        x1[:,tongdao,:,:,:] = time + 2
-    winner = [(tongdao_seq[i],x_w_position_seq[i],x_h_position_seq[i]) for i in range(num)] 
-    return winner
+            break
+    return winners
 
-# only one neuron can fire at each position (for != feature maps)
-def pointwise_inhibition(thresholded_potentials,threshold=10.):
-    thresholded_potentials = thresholded_potentials.squeeze(1)
-
-    # maximum of each position in each time step
-    maximum = torch.max(thresholded_potentials, dim=1, keepdim=True)
-    # compute signs for detection of the earliest spike
-    clamp_pot = maximum[0].sign()
-
-    # maximum of clamped values is the indices of the earliest spikes
-    x = thresholded_potentials.permute(1,2,3,0)
-    x[x<threshold] =0
-    x = x.sign()
-    x1 = functional.first_spike_index(x)
-    clamp_pot_max_1 = (x1.int()) * (torch.arange(0,clamp_pot.size(0)).detach().to(device) + 1)
-    clamp_pot_max_1[clamp_pot_max_1==0] = clamp_pot.size(0)+2
-    clamp_pot_max_1,_ = clamp_pot_max_1.min(dim=3,keepdim=True)
-    clamp_pot_max_1,_ = clamp_pot_max_1.min(dim=0,keepdim=True)
-    clamp_pot_max_1 = clamp_pot_max_1.permute(3,0,1,2) - 1 
-    clamp_pot_max_1.clamp_(0, clamp_pot.size(0) - 1)
-    # last timestep of each feature map
-    clamp_pot_max_0 = clamp_pot.sum(dim=0,keepdim=True)
-
-    # finding winners (maximum potentials between early spikes) (indices of winners)
-    winners = maximum[1].gather(0, clamp_pot_max_1)
-    # generating inhibition coefficient
-    coef = torch.zeros_like(thresholded_potentials[0]).unsqueeze_(0)
-    coef.scatter_(1, winners, clamp_pot_max_0)
-    # applying inhibition to potentials (broadcasting multiplication)
-    thresholded_potentials = torch.mul(thresholded_potentials, coef)
-    thresholded_potentials = thresholded_potentials.unsqueeze(1)
-    return thresholded_potentials
-
-#简化STDP不根据具体时间大小进行更新，只根据时间的顺序更新
 class STDP(nn.Module):
     def __init__(self, conv_layer, learning_rate=(0.004, -0.003), use_stabilizer=True, lower_bound=0, upper_bound=1):
         super(STDP, self).__init__()
@@ -149,9 +110,10 @@ class STDP(nn.Module):
         # accumulating input and output spikes to get latencies
         input_spikes = input_spikes.permute(1,2,3,0) * (torch.arange(0,input_spikes.shape[0]).detach().to(input_spikes.device) + 1)
         input_spikes = input_spikes.permute(3,0,1,2)
+        input_spikes[input_spikes==0] = 10000000
+        input_latencies,_ = torch.min(input_spikes, dim=0)
+        #print(input_latencies.shape)
         
-        input_latencies = torch.sum(input_spikes, dim=0)
-        input_latencies[input_latencies==0] = 10000000
         
         output_spikes = output_spikes.permute(1,2,3,0)
         output_spikes = functional.first_spike_index(output_spikes) 
@@ -160,7 +122,7 @@ class STDP(nn.Module):
         output_spikes = output_spikes.permute(3,0,1,2)
         
         output_latencies = torch.sum(output_spikes, dim=0)
-        
+        #print(output_latencies.shape)
         result = []
         for winner in winners:
             # generating repeated output tensor with the same size of the receptive field
@@ -173,7 +135,7 @@ class STDP(nn.Module):
                                         winner[-1]: winner[-1] + self.conv_layer.kernel_size[-1]]
             #print(out_tensor)
             result.append(torch.le(in_tensor, out_tensor))
-
+        
         return result
 
     def forward(self, input_spikes, output_spikes, winners):
@@ -183,6 +145,7 @@ class STDP(nn.Module):
         lr = torch.zeros_like(self.conv_layer.weight)
         for i in range(len(winners)):
             winner = winners[i][0]
+            device = input_spikes.device
             pair = pairings[i].clone().detach().to(device)
             lr0 = self.learning_rate[0].clone().detach().to(device)
             lr1 = self.learning_rate[1].clone().detach().to(device)
@@ -194,6 +157,34 @@ class STDP(nn.Module):
 
     def update_learning_rate(self, ap, an):
         self.learning_rate = tuple([ap, an])
+
+# only one neuron can fire at each position (for != feature maps)
+def pointwise_inhibition(thresholded_potentials):
+
+    # maximum of each position in each time step
+    maximum = torch.max(thresholded_potentials, dim=1, keepdim=True)
+    # compute signs for detection of the earliest spike
+    clamp_pot = maximum[0].sign()
+    
+    # maximum of clamped values is the indices of the earliest spikes
+    clamp_pot_max_1 = (clamp_pot.permute(1,2,3,0).int() * (torch.arange(0,clamp_pot.shape[0]).detach().to(clamp_pot.device) + 1)).permute(3,0,1,2)
+    clamp_pot_max_1[clamp_pot_max_1==0] = clamp_pot.shape[0] 
+    clamp_pot_max_1 = clamp_pot_max_1 - 1
+    clamp_pot_max_1, _ = torch.min(clamp_pot_max_1, dim=0, keepdim=True)
+    clamp_pot_max_1.clamp_(0, clamp_pot.size(0) - 1)
+
+    # last timestep of each feature map
+    clamp_pot_max_0 = clamp_pot.sum(0,True)
+    # finding winners (maximum potentials between early spikes) (indices of winners)
+    winners = maximum[1].gather(0, clamp_pot_max_1)
+
+    # generating inhibition coefficient
+    coef = torch.zeros_like(thresholded_potentials[0]).unsqueeze_(0)
+    coef.scatter_(1, winners, clamp_pot_max_0)
+    # applying inhibition to potentials (broadcasting multiplication)
+
+    return torch.mul(thresholded_potentials, coef)
+    
 def Tstdp_linear_single_step(
     fc: nn.Linear, in_spike: torch.Tensor, out_spike: torch.Tensor,
     trace_pre1: Union[float, torch.Tensor, None],trace_pre2: Union[float, torch.Tensor, None],
