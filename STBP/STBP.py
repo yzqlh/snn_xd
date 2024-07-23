@@ -58,7 +58,8 @@ class LIFSpike(nn.Module):
         self.steps = steps
 
     def forward(self, x):
-        u   = torch.zeros(x.shape, device=x.device)
+        #---------修改----------#
+        u   = torch.zeros(x.shape[:-1], device=x.device)
         out = torch.zeros(x.shape, device=x.device)
         for step in range(self.steps):
             u, out[step, ...] = state_update(u, out[max(step-1, 0), ...], x[step, ...])
