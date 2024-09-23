@@ -8,6 +8,7 @@
 ```python
 class SpikeAct(torch.autograd.Function):
 ```
+
 #### 核心子函数
 
 - forward：实现前向传播，并保存前向传播中的张量
@@ -21,3 +22,11 @@ def state_update(u_t_n1, o_t_n1, W_mul_o_t1_n):
 - u_t_n1：上一时刻的膜电位
 - o_t_n1：上一时刻的输出
 - W_mul_o_t1_n：上一时刻的输出与权重乘积
+
+### **LIFSpike**
+
+```python
+class LIFSpike(nn.Module):
+```
+
+- STEPS：
