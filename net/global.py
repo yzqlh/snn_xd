@@ -35,14 +35,12 @@ def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:s
         label = label.to(device)
         label_onehot = F.one_hot(label, 10).float()
 
-        # 混合精度训练
         img = img.permute(1, 0, 2, 3, 4)
         out_fr1 = 0.
         out_fr1 = net(img)
         out_fr1 = out_fr1.sum(dim=0) / time
 
-        loss = F.mse_loss(out_fr1, label_onehot)
-
+        loss = F.mse_loss(out_fr1, label_onehot
         loss.backward()
         optimizer.step()
         functional.reset_net(net)
