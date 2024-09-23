@@ -30,3 +30,7 @@ def state_update(u_t_n1, o_t_n1, W_mul_o_t1_n):
 ```
 
 - STEPS：时间步长
+
+#### 核心子函数
+
+- forward：实现膜电位和输出的更新，应用了state_update函数与SpikeAct建立了联系
