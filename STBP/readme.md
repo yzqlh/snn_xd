@@ -26,7 +26,7 @@ def state_update(u_t_n1, o_t_n1, W_mul_o_t1_n):
 ### **LIFSpike**
 
 ```python
-class LIFSpike(nn.Module):
+(steps=STEPS)
 ```
 
-- STEPS：
+- STEPS：时间步长
