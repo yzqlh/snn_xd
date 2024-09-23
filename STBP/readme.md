@@ -10,5 +10,5 @@ class SpikeAct(torch.autograd.Function):
 ```
 #### 核心子函数
 
-- forward
+- forward 
 - backward
