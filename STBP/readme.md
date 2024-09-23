@@ -18,6 +18,6 @@ class SpikeAct(torch.autograd.Function):
 ```python
 def state_update(u_t_n1, o_t_n1, W_mul_o_t1_n):
 ```
-- u_t_n1：
-- o_t_n1：
-- W_mul_o_t1_n：
+- u_t_n1：上一时刻的膜电位
+- o_t_n1：上一时刻的输出
+- W_mul_o_t1_n：上一时刻的输出与权重乘积
