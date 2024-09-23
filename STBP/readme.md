@@ -8,5 +8,7 @@
 ```python
 class SpikeAct(torch.autograd.Function):
 ```
-- **forward** (float) – 神经元的阈值电压
-- **backward** (float)  神经元膜电位的时间常量，默认为6.0
+#### 核心子函数
+
+- forward
+- backward
