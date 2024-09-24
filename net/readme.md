@@ -31,6 +31,11 @@ def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', enco
 ```python
 def get_loader(phase, dataset_name, encoder, batch_size, time):
 ```
+- phase：测试阶段或训练阶段
+- dataset_name：所训练的数据集的名称
+- encoder：所使用的数据集编码器
+- batch_size：一次训练多少数据
+- time：时间步长
 
 #### example
 ```python
