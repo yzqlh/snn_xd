@@ -1,6 +1,8 @@
 ## net
 
 ### **global**
+
+#### example
 ```python
 net =nn.Sequential(
         layer.Conv2d(1,10,5,bias=False),
