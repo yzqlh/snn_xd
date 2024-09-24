@@ -9,7 +9,7 @@
 ```python
 def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
 ```
-- net：网络结构
+- net：用户定义的网络结构
 - device：启用GPU加速定义的device
 - batch_size：一次训练多少数据
 - time：时间步长
@@ -20,7 +20,7 @@ def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', enco
 ```python
 def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
 ```
-- net：网络结构
+- net：用户定义的网络结构
 - device：启用GPU加速定义的device
 - batch_size：一次训练多少数据
 - time：时间步长
