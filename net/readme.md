@@ -38,8 +38,8 @@ def get_loader(phase, dataset_name, encoder, batch_size, time):
 - time：时间步长
 
 #### example
-对于全局学习算法来说，完成训练和测试过程只需：建立网络、调用train_global和test_global即可
-我们搭建了一个简单的网络
+- 对于全局学习算法来说，完成训练和测试过程只需：建立网络、调用train_global和test_global即可
+- 我们搭建了一个简单的网络
 ```python
 net =nn.Sequential(
         layer.Conv2d(1,10,5,bias=False),
