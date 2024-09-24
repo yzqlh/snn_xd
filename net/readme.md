@@ -4,11 +4,23 @@
 - STBP全局学习算法网络实现
 - STDP局部学习算法网络实现
 ### **global**
-- train_global
-```python
 
+#### train_global
+```python
+def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
 ```
-#### example
+
+#### test_global
+```python
+def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
+```
+
+#### get_loader
+```python
+def get_loader(phase, dataset_name, encoder, batch_size, time):
+```
+
+##### example
 ```python
 net =nn.Sequential(
         layer.Conv2d(1,10,5,bias=False),
