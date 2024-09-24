@@ -1,5 +1,7 @@
 ## net
 
+- STBP全局学习算法网络实现
+- STDP局部学习算法网络实现
 ### **global**
 
 #### example
