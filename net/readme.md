@@ -13,8 +13,8 @@ def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', enco
 - device：启用GPU加速定义的device
 - batch_size：一次训练多少数据
 - time：时间步长
-- dataset_name：所训练的数据集的名称，默认为'MNIST'
-- encoder：所使用的数据集编码器，默认为'poisson'
+- dataset_name：所训练的数据集的名称，默认为`MNIST`
+- encoder：所使用的数据集编码器，默认为`poisson`
 
 #### test_global
 ```python
@@ -24,16 +24,16 @@ def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', enco
 - device：启用GPU加速定义的device
 - batch_size：一次训练多少数据
 - time：时间步长
-- dataset_name：所训练的数据集的名称，默认为'MNIST'
-- encoder：所使用的数据集编码器，默认为'poisson'
+- dataset_name：所训练的数据集的名称，默认为`MNIST`
+- encoder：所使用的数据集编码器，默认为`poisson`
 
 #### get_loader
 ```python
 def get_loader(phase, dataset_name, encoder, batch_size, time):
 ```
 - phase：测试阶段或训练阶段
-- dataset_name：所训练的数据集的名称，默认为'MNIST'
-- encoder：所使用的数据集编码器，默认为'poisson'
+- dataset_name：所训练的数据集的名称，默认为`MNIST`
+- encoder：所使用的数据集编码器，默认为`poisson`
 - batch_size：一次训练多少数据
 - time：时间步长
 
