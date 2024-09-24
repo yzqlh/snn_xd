@@ -7,13 +7,25 @@
 
 #### train_global
 ```python
-def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
+def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
 ```
+- net：网络结构
+- device：启用GPU加速定义的device
+- batch_size：一次训练多少数据
+- time：时间步长
+- dataset_name：所训练的数据集的名称
+- encoder：所使用的数据集编码器
 
 #### test_global
 ```python
-def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
+def train_global(net, device, batch_size, time, dataset_name:str = 'MNIST', encoder:str = 'poisson'):
 ```
+- net：网络结构
+- device：启用GPU加速定义的device
+- batch_size：一次训练多少数据
+- time：时间步长
+- dataset_name：所训练的数据集的名称
+- encoder：所使用的数据集编码器
 
 #### get_loader
 ```python
