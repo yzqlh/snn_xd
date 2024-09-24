@@ -20,7 +20,7 @@ def train_global(device, batch_size, time, dataset_name:str = 'MNIST', encoder:s
 def get_loader(phase, dataset_name, encoder, batch_size, time):
 ```
 
-##### example
+#### example
 ```python
 net =nn.Sequential(
         layer.Conv2d(1,10,5,bias=False),
