@@ -96,14 +96,11 @@ def pad(input, pad, value=0):
 class inhibit_layer(nn.Module):
     def __init__(self):
         super(inhibit_layer, self).__init__()
-
     def forward(self, x):
-
         if self.training:
             x = x.squeeze(1)
             x = learning.pointwise_inhibition(x)
             x = x.unsqueeze(1)
-
         else:
             pass
         return x
@@ -170,11 +167,10 @@ def pass_batch_through_network(model, batch, device='cuda'):
             data_in = data_in.unsqueeze(1)
             output = model(data_in)
             h = model[6].h
-            print(h.shape)
+            h = h.squeeze(1)
             pooled_spk, _ = torch.max(h.reshape(h.size(1), -1), dim=1)
             spk_out = pooled_spk.view(1, h.size(1))
             h = spk_out
-
             functional.reset_net(model)
             ans.append(h.reshape(-1).cpu().numpy())
         return np.array(ans)
